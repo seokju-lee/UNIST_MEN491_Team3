@@ -1,6 +1,7 @@
 import sys
 import math
 import numpy as np
+from numpy.lib.function_base import average
 from rospy.names import scoped_name
 import rospy
 import csv
@@ -8,11 +9,64 @@ import time
 
 # Parameters
 k = 0.3  # look forward gain
-Lfc = 0.3  # [m] look-ahead distance
+Lfc = 0.5  # [m] look-ahead distance
 Kp = 2.5  # speed proportional gain
 WB = 0.5  # [m] wheel base of vehicle
+vel = 9
 
 #drives straight ahead at a speed of 5
+def distance(x1, y1, x2, y2):
+    result = math.sqrt( math.pow(x1 - x2, 2) + math.pow(y1 - y2, 2))
+    return result
+
+def ave(x1,x2):
+    result = (x1 + x2) / 2
+    return result
+
+def ai_tuning(ai, poses):
+    x = poses[0][0]
+    y = poses[1][0]
+    if x < 0 and y < 0 and x > -13 and y > -20:
+        ai = (20 - vel) * (1 - distance(x,y,0,0) / distance(0,0,-13,-20)) + vel
+    elif x < -25.5 and y < -32.6 and x > -59 and y > -43:
+        d0 = distance(-25.5, -32.6,-61, -43)
+        d = distance(x, y, -25.5, -32.6)
+        n = 4
+        if d < d0 / n:
+            ai = (17 - vel) * (n * d / d0) + vel
+        else:
+            # ai = (20 - vel) * (n / (1-n) * (d-d0/n) / d0)
+            ai = 17 - (17 - vel) * ((d-d0/n) / (d0-d0/n))
+    elif x < -110 and y > -84 and y < -11:
+        ai = 10
+    elif x > -105 and y < -9 and x < -60 and y > -24:
+        d0 = distance(-105, -9,-60, -24)
+        d = distance(x, y, -105, -9)
+        n = 4
+        if d < d0 / n:
+            ai = (16 - vel) * (n * d / d0) + vel
+        else:
+            # ai = (20 - vel) * (n / (1-n) * (d-d0/n) / d0)
+            ai = 16 - (16 - vel) * ((d-d0/n) / (d0-d0/n))
+    elif x > -22 and y > -10:
+        ai = 10
+    else:
+        ai = vel
+    
+
+    if ai > 20:
+        ai = 20
+    elif ai < vel:
+        ai = vel
+    return ai
+
+def Look_Ahead_Distance(Lfc, poses):
+    x = poses[0][0]
+    y = poses[1][0]
+    if x < 0 and y < 0 and x > -13 and y > -20:
+        Lfc = 15
+    print(Lfc)
+    return Lfc
 
 class State:
 
@@ -90,7 +144,7 @@ class TargetCourse:
         return ind, Lf
 
 
-def pure_pursuit_steer_control(state, trajectory, pind):
+def pure_pursuit_steer_control(state, trajectory, pind, poses):
     ind, Lf = trajectory.search_target_index(state)
 
     # if pind >= ind:
@@ -104,9 +158,9 @@ def pure_pursuit_steer_control(state, trajectory, pind):
         ty = trajectory.cy[-1]
         ind = len(trajectory.cx) - 1
 
+    Lf = Look_Ahead_Distance(Lf, poses)
     alpha = math.atan2(ty - state.rear_y, tx - state.rear_x) - state.yaw # theta
     delta = math.atan2(2.0 * WB * math.sin(alpha) / Lf, 1.0) # delta
-    print('tx, ty: ', tx, ty)
 
     return delta, ind
 
@@ -117,7 +171,7 @@ class PureDriver:
         self.states = States()
         cx = []
         cy = []
-        f = open('/home/seok-ju/seok_ws/src/MEN491_2021/f1tenth-riders-quickstart/pkg/src/pkg/Team_3/mapstrack.csv','r', encoding='utf-8-sig')
+        f = open('/home/seok-ju/seok_ws/src/MEN491_2021/f1tenth-riders-quickstart/pkg/src/pkg/Team_3/maps/track.csv','r', encoding='utf-8-sig')
         rdr = csv.reader(f)
         count = 0
         for line in rdr:
@@ -141,18 +195,19 @@ class PureDriver:
         #  target course
         
         
-        target_speed = 10.0  # [m/s]
-
-        # print('rear: ', state.rear_x, state.rear_y)
-    
-        # print(state.rear_x)
+        target_speed = vel  # [m/s]
+        target_speed = ai_tuning(target_speed, poses)
         
-        print(poses[0][0], poses[1][0])
         di, self.target_ind = pure_pursuit_steer_control(
-            self.state, self.target_course, self.target_ind)
+            self.state, self.target_course, self.target_ind, poses)
         
+        x = poses[0][0]
+        y = poses[1][0]
         if np.abs(di) > 0.05:
-            target_speed = 4
+            if x > -109.4 and y > -68.8 and x < -57 and y < -29:
+                target_speed = vel * 2 / 3
+            else:
+                target_speed = vel * 1 / 2
 
         ai = proportional_control(target_speed, self.state.v)
         
@@ -161,8 +216,6 @@ class PureDriver:
         self.past_time = self.present_time
         self.state.update(ai, dt, poses)  # Control vehicle
         self.states.append(time, self.state)
-        self.speed = self.state.v    
-        # print('ai, di: ', self.speed, di)
+        self.speed = self.state.v
+        print(self.speed, di)
         return self.speed, di
-
-
